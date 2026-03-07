@@ -360,6 +360,120 @@ func (e *Emitter) EmitPipelineEnd(finalStatus, duration string) {
 	})
 }
 
+// EmitNodeSkip emits a node skip event (e.g. during checkpoint resume).
+func (e *Emitter) EmitNodeSkip(nodeID, nodeLabel, reason string) {
+	e.Emit(Event{
+		Type:   EventNodeSkip,
+		NodeID: nodeID,
+		Data: EventData{
+			NodeLabel: nodeLabel,
+			Notes:     reason,
+		},
+	})
+}
+
+// EmitEdgeEvaluated emits an edge condition evaluation event.
+func (e *Emitter) EmitEdgeEvaluated(fromNode, toNode, condition string, conditionMet bool) {
+	e.Emit(Event{
+		Type:   EventEdgeEvaluated,
+		NodeID: fromNode,
+		Data: EventData{
+			FromNode:     fromNode,
+			ToNode:       toNode,
+			Condition:    condition,
+			ConditionMet: conditionMet,
+		},
+	})
+}
+
+// EmitLLMError emits an LLM error event.
+func (e *Emitter) EmitLLMError(nodeID string, err error) {
+	e.Emit(Event{
+		Type:   EventLLMError,
+		NodeID: nodeID,
+		Data: EventData{
+			Error: err.Error(),
+		},
+	})
+}
+
+// EmitToolOutput emits a tool output event (raw output before tool end).
+func (e *Emitter) EmitToolOutput(nodeID, toolName, output string) {
+	e.Emit(Event{
+		Type:   EventToolOutput,
+		NodeID: nodeID,
+		Data: EventData{
+			ToolName:   toolName,
+			ToolOutput: output,
+		},
+	})
+}
+
+// EmitToolError emits a tool error event.
+func (e *Emitter) EmitToolError(nodeID, toolName string, err error) {
+	e.Emit(Event{
+		Type:   EventToolError,
+		NodeID: nodeID,
+		Data: EventData{
+			ToolName: toolName,
+			Error:    err.Error(),
+		},
+	})
+}
+
+// EmitHumanTimeout emits a human timeout event.
+func (e *Emitter) EmitHumanTimeout(nodeID, question, fallback string) {
+	e.Emit(Event{
+		Type:   EventHumanTimeout,
+		NodeID: nodeID,
+		Data: EventData{
+			Question: question,
+			Selected: fallback,
+		},
+	})
+}
+
+// EmitCheckpoint emits a checkpoint saved event.
+func (e *Emitter) EmitCheckpoint(nodeID string) {
+	e.Emit(Event{
+		Type:   EventCheckpoint,
+		NodeID: nodeID,
+	})
+}
+
+// EmitLoopDetected emits a loop detection event.
+func (e *Emitter) EmitLoopDetected(nodeID, message string) {
+	e.Emit(Event{
+		Type:   EventLoopDetected,
+		NodeID: nodeID,
+		Data: EventData{
+			Message: message,
+		},
+	})
+}
+
+// EmitGoalGateCheck emits a goal gate check event.
+func (e *Emitter) EmitGoalGateCheck(nodeID string, status string) {
+	e.Emit(Event{
+		Type:   EventGoalGateCheck,
+		NodeID: nodeID,
+		Data: EventData{
+			Status: status,
+		},
+	})
+}
+
+// EmitGoalGateFail emits a goal gate failure event.
+func (e *Emitter) EmitGoalGateFail(nodeID, failureReason string) {
+	e.Emit(Event{
+		Type:   EventGoalGateFail,
+		NodeID: nodeID,
+		Data: EventData{
+			FailureReason: failureReason,
+		},
+	})
+}
+
 // Close closes all subscriber channels.
 func (e *Emitter) Close() {
 	e.mu.Lock()

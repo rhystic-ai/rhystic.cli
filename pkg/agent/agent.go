@@ -171,6 +171,7 @@ func (s *Session) Submit(ctx context.Context, input string) error {
 		// Build and send request
 		resp, err := s.callLLM(ctx)
 		if err != nil {
+			s.Events.EmitLLMError("", err)
 			s.Events.EmitError("", err)
 			return err
 		}
@@ -223,6 +224,7 @@ func (s *Session) Submit(ctx context.Context, input string) error {
 					Content:   warning,
 					Timestamp: time.Now(),
 				})
+				s.Events.EmitLoopDetected("", warning)
 				s.Events.EmitLog("warn", warning)
 			}
 		}
@@ -359,12 +361,14 @@ func (s *Session) executeToolCalls(ctx context.Context, toolCalls []llm.ToolCall
 
 		tool, ok := s.ToolRegistry.Get(tc.Name)
 		if !ok {
+			toolErr := fmt.Errorf("unknown tool: %s", tc.Name)
 			result := ToolResult{
 				ToolCallID: tc.ID,
-				Content:    fmt.Sprintf("Unknown tool: %s", tc.Name),
+				Content:    toolErr.Error(),
 				IsError:    true,
 			}
 			results = append(results, result)
+			s.Events.EmitToolError("", tc.Name, toolErr)
 			s.Events.EmitToolEnd("", tc.Name, result.Content, true)
 			continue
 		}
@@ -377,6 +381,7 @@ func (s *Session) executeToolCalls(ctx context.Context, toolCalls []llm.ToolCall
 				IsError:    true,
 			}
 			results = append(results, result)
+			s.Events.EmitToolError("", tc.Name, err)
 			s.Events.EmitToolEnd("", tc.Name, result.Content, true)
 			continue
 		}
@@ -390,6 +395,7 @@ func (s *Session) executeToolCalls(ctx context.Context, toolCalls []llm.ToolCall
 			IsError:    false,
 		}
 		results = append(results, result)
+		s.Events.EmitToolOutput("", tc.Name, output)
 		s.Events.EmitToolEnd("", tc.Name, output, false)
 	}
 

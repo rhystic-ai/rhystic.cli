@@ -124,6 +124,25 @@ func (e *Engine) Run(ctx context.Context) (pcontext.Outcome, error) {
 	var lastOutcome pcontext.Outcome
 	startTime := time.Now()
 
+	// Resume from checkpoint if configured
+	completedSet := make(map[string]bool)
+	if e.Config.ResumeFromCheckpoint {
+		cp, err := pcontext.LoadCheckpoint(logsRoot)
+		if err != nil {
+			e.Events.EmitLog("warn", fmt.Sprintf("checkpoint load failed, starting fresh: %v", err))
+		} else {
+			for _, nodeID := range cp.CompletedNodes {
+				completedSet[nodeID] = true
+			}
+			e.completedNodes = cp.CompletedNodes
+			e.nodeOutcomes = cp.NodeOutcomes
+			if cp.Context != nil {
+				e.Context.Merge(cp.Context)
+			}
+			e.Events.EmitLog("info", fmt.Sprintf("Resuming from checkpoint with %d completed nodes", len(completedSet)))
+		}
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -132,6 +151,38 @@ func (e *Engine) Run(ctx context.Context) (pcontext.Outcome, error) {
 		}
 
 		node := currentNode
+
+		// Skip nodes already completed (checkpoint resume)
+		if completedSet[node.ID] {
+			e.Events.EmitNodeSkip(node.ID, node.Label(), "already completed in previous run")
+			// Use stored outcome for edge selection
+			if outcome, ok := e.nodeOutcomes[node.ID]; ok {
+				lastOutcome = outcome
+				// Apply context updates from stored outcome
+				for key, value := range outcome.ContextUpdates {
+					e.Context.Set(key, value)
+				}
+				e.Context.Set("outcome", string(outcome.Status))
+				if outcome.PreferredLabel != "" {
+					e.Context.Set("preferred_label", outcome.PreferredLabel)
+				}
+				// Select next edge based on stored outcome
+				nextEdge := e.selectEdge(node, outcome)
+				if nextEdge == nil {
+					if e.Graph.IsTerminal(node.ID) {
+						break
+					}
+					break
+				}
+				nextNode, exists := e.Graph.Nodes[nextEdge.To]
+				if !exists {
+					return pcontext.Outcome{}, fmt.Errorf("edge target node not found: %s", nextEdge.To)
+				}
+				currentNode = nextNode
+				continue
+			}
+			// No stored outcome — fall through to re-execute
+		}
 
 		// Check for terminal node
 		if e.Graph.IsTerminal(node.ID) {
@@ -177,6 +228,8 @@ func (e *Engine) Run(ctx context.Context) (pcontext.Outcome, error) {
 			cp.NodeOutcomes = e.nodeOutcomes
 			if err := cp.Save(logsRoot); err != nil {
 				e.Events.EmitLog("warn", fmt.Sprintf("checkpoint save failed: %v", err))
+			} else {
+				e.Events.EmitCheckpoint(node.ID)
 			}
 		}
 
@@ -321,7 +374,9 @@ func (e *Engine) selectEdge(node *dot.Node, outcome pcontext.Outcome) *dot.Edge 
 	var conditionMatched []*dot.Edge
 	for _, edge := range edges {
 		if edge.Condition() != "" {
-			if e.evaluateCondition(edge.Condition(), outcome) {
+			met := e.evaluateCondition(edge.Condition(), outcome)
+			e.Events.EmitEdgeEvaluated(node.ID, edge.To, edge.Condition(), met)
+			if met {
 				conditionMatched = append(conditionMatched, edge)
 			}
 		}
@@ -440,7 +495,9 @@ func (e *Engine) checkGoalGates() (bool, *dot.Node) {
 		node := e.Graph.Nodes[nodeID]
 		if node != nil && node.GoalGate() {
 			outcome, exists := e.nodeOutcomes[nodeID]
+			e.Events.EmitGoalGateCheck(nodeID, string(outcome.Status))
 			if exists && outcome.Status != pcontext.StatusSuccess && outcome.Status != pcontext.StatusPartialSuccess {
+				e.Events.EmitGoalGateFail(nodeID, outcome.FailureReason)
 				return false, node
 			}
 		}

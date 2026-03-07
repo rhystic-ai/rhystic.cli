@@ -597,6 +597,50 @@ func handleEvents(ch <-chan events.Event, stdout, stderr io.Writer, verbose, noC
 						event.Data.FromNode, event.Data.ToNode)
 				}
 			}
+		case events.EventNodeSkip:
+			if verbose {
+				printEvent(stdout, noColor, "skip", "Skipping: %s (%s)",
+					event.Data.NodeLabel, event.Data.Notes)
+			}
+		case events.EventEdgeEvaluated:
+			if verbose {
+				met := "false"
+				if event.Data.ConditionMet {
+					met = "true"
+				}
+				printEvent(stdout, noColor, "edge", "Evaluated: %s -> %s [%s] = %s",
+					event.Data.FromNode, event.Data.ToNode, event.Data.Condition, met)
+			}
+		case events.EventLLMError:
+			printEvent(stderr, noColor, "error", "LLM error: %s", event.Data.Error)
+		case events.EventToolOutput:
+			if verbose {
+				output := truncateString(event.Data.ToolOutput, 200)
+				printEvent(stdout, noColor, "tool", "Output from %s: %s",
+					event.Data.ToolName, output)
+			}
+		case events.EventToolError:
+			printEvent(stderr, noColor, "error", "Tool error (%s): %s",
+				event.Data.ToolName, event.Data.Error)
+		case events.EventHumanTimeout:
+			printEvent(stdout, noColor, "human", "Timeout: defaulting to %s",
+				event.Data.Selected)
+		case events.EventCheckpoint:
+			if verbose {
+				printEvent(stdout, noColor, "checkpoint", "Saved checkpoint at %s",
+					event.NodeID)
+			}
+		case events.EventLoopDetected:
+			printEvent(stderr, noColor, "warn", "Loop detected: %s",
+				event.Data.Message)
+		case events.EventGoalGateCheck:
+			if verbose {
+				printEvent(stdout, noColor, "gate", "Goal gate check: %s (%s)",
+					event.NodeID, event.Data.Status)
+			}
+		case events.EventGoalGateFail:
+			printEvent(stderr, noColor, "error", "Goal gate failed: %s - %s",
+				event.NodeID, event.Data.FailureReason)
 		}
 	}
 }

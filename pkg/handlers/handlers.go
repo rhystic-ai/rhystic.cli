@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/rhystic/attractor/pkg/agent"
 	pcontext "github.com/rhystic/attractor/pkg/context"
@@ -198,6 +199,7 @@ func (h *CodergenHandler) Execute(ctx context.Context, node *dot.Node, pctx *pco
 	}()
 
 	if err := session.Submit(ctx, prompt); err != nil {
+		emitter.EmitLLMError(node.ID, err)
 		return pcontext.NewFailOutcome(fmt.Sprintf("agent error: %v", err))
 	}
 
@@ -280,14 +282,37 @@ func (h *WaitForHumanHandler) Execute(ctx context.Context, node *dot.Node, pctx 
 
 	emitter.EmitHumanWaiting(node.ID, question, options)
 
-	// Get answer
+	// Get answer, with optional timeout from node configuration
 	var selected string
 	if h.AnswerFunc != nil {
-		answer, err := h.AnswerFunc(question, options)
-		if err != nil {
-			return pcontext.NewFailOutcome(fmt.Sprintf("human input error: %v", err))
+		timeout := node.Timeout()
+		if timeout > 0 {
+			type answerResult struct {
+				answer string
+				err    error
+			}
+			ch := make(chan answerResult, 1)
+			go func() {
+				answer, err := h.AnswerFunc(question, options)
+				ch <- answerResult{answer, err}
+			}()
+			select {
+			case res := <-ch:
+				if res.err != nil {
+					return pcontext.NewFailOutcome(fmt.Sprintf("human input error: %v", res.err))
+				}
+				selected = res.answer
+			case <-time.After(timeout):
+				selected = options[0]
+				emitter.EmitHumanTimeout(node.ID, question, selected)
+			}
+		} else {
+			answer, err := h.AnswerFunc(question, options)
+			if err != nil {
+				return pcontext.NewFailOutcome(fmt.Sprintf("human input error: %v", err))
+			}
+			selected = answer
 		}
-		selected = answer
 	} else {
 		// Default: use first option
 		selected = options[0]
@@ -353,6 +378,7 @@ func (h *ToolHandler) Execute(ctx context.Context, node *dot.Node, pctx *pcontex
 	// For now, simulate success
 	result := fmt.Sprintf("Tool executed: %s", command)
 
+	emitter.EmitToolOutput(node.ID, "shell", result)
 	emitter.EmitToolEnd(node.ID, "shell", result, false)
 
 	return pcontext.NewSuccessOutcome(result).
