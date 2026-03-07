@@ -68,7 +68,7 @@ type options struct {
 
 func parseArgs(args []string) (string, options, error) {
 	opts := options{
-		model:      "anthropic/claude-sonnet-4",
+		model:      "minimax/minimax-m2.5",
 		logsDir:    "./attractor-logs",
 		timeout:    30 * time.Minute,
 		maxRetries: 50,
@@ -165,7 +165,7 @@ Commands:
 
 Run Options:
   -f, --file <path>      DOT pipeline file to execute
-  -m, --model <name>     LLM model (default: anthropic/claude-sonnet-4)
+  -m, --model <name>     LLM model (default: minimax/minimax-m2.5)
   -l, --logs <dir>       Logs directory (default: ./attractor-logs)
   -t, --timeout <dur>    Execution timeout (default: 30m)
   --max-retries <n>      Maximum retries per node (default: 50)
@@ -174,7 +174,7 @@ Run Options:
   --no-color             Disable colored output
 
 Agent Options:
-  -m, --model <name>     LLM model (default: anthropic/claude-sonnet-4)
+  -m, --model <name>     LLM model (default: minimax/minimax-m2.5)
   --verbose              Enable verbose output
 
 Environment Variables:
