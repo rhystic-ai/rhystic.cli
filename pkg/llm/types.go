@@ -183,6 +183,36 @@ func (u Usage) Add(other Usage) Usage {
 	}
 }
 
+// ModelPricing holds cost per million tokens in USD.
+type ModelPricing struct {
+	InputPerMillion  float64
+	OutputPerMillion float64
+}
+
+// ModelPrices contains known model pricing (USD per million tokens).
+var ModelPrices = map[string]ModelPricing{
+	"minimax/minimax-m2.5": {InputPerMillion: 0.295, OutputPerMillion: 1.20},
+}
+
+// Cost calculates the cost in USD for this usage with the given model.
+// Returns total, inputCost, outputCost. If model is unknown, returns zeros.
+func (u Usage) Cost(model string) (total, inputCost, outputCost float64) {
+	pricing, ok := ModelPrices[model]
+	if !ok {
+		return 0, 0, 0
+	}
+	inputCost = float64(u.InputTokens) / 1_000_000 * pricing.InputPerMillion
+	outputCost = float64(u.OutputTokens) / 1_000_000 * pricing.OutputPerMillion
+	total = inputCost + outputCost
+	return
+}
+
+// HasPricing returns true if the model has known pricing.
+func HasPricing(model string) bool {
+	_, ok := ModelPrices[model]
+	return ok
+}
+
 // Response represents a completion response from the LLM.
 type Response struct {
 	ID           string          `json:"id"`

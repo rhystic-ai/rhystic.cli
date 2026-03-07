@@ -278,6 +278,11 @@ func (s *Session) TotalUsage() llm.Usage {
 	return s.totalTokens
 }
 
+// Model returns the model being used by this session.
+func (s *Session) Model() string {
+	return s.Config.Model
+}
+
 func (s *Session) callLLM(ctx context.Context) (llm.Response, error) {
 	// Build messages
 	messages := []llm.Message{
