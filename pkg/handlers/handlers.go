@@ -3,6 +3,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"github.com/rhystic/attractor/pkg/dot"
 	"github.com/rhystic/attractor/pkg/events"
 	"github.com/rhystic/attractor/pkg/llm"
+	"github.com/rhystic/attractor/pkg/store"
 )
 
 // Handler executes a node in the pipeline.
@@ -25,6 +27,7 @@ type Handler interface {
 type Registry struct {
 	handlers       map[string]Handler
 	defaultHandler Handler
+	codergen       *CodergenHandler // reference kept for store wiring
 }
 
 // NewRegistry creates a new handler registry with defaults.
@@ -42,6 +45,7 @@ func NewRegistry(llmClient *llm.Client) *Registry {
 	codergen := &CodergenHandler{Client: llmClient}
 	r.Register("codergen", codergen)
 	r.defaultHandler = codergen
+	r.codergen = codergen
 
 	r.Register("wait.human", &WaitForHumanHandler{})
 	r.Register("parallel", &ParallelHandler{})
@@ -54,6 +58,15 @@ func NewRegistry(llmClient *llm.Client) *Registry {
 // Register adds a handler for a type.
 func (r *Registry) Register(typ string, handler Handler) {
 	r.handlers[typ] = handler
+}
+
+// SetStore configures the persistence store and run ID on handlers that
+// support it. This allows the engine to wire persistence after construction.
+func (r *Registry) SetStore(s *store.Store, runID string) {
+	if r.codergen != nil {
+		r.codergen.Store = s
+		r.codergen.RunID = runID
+	}
 }
 
 // Resolve returns the handler for a node.
@@ -123,6 +136,8 @@ func (h *ConditionalHandler) Execute(ctx context.Context, node *dot.Node, pctx *
 // CodergenHandler executes LLM-based code generation tasks.
 type CodergenHandler struct {
 	Client *llm.Client
+	Store  *store.Store // Optional persistence; nil disables DB writes.
+	RunID  string       // Set by engine before execution.
 }
 
 func (h *CodergenHandler) Execute(ctx context.Context, node *dot.Node, pctx *pcontext.Context, graph *dot.Graph, logsRoot string, emitter *events.Emitter) pcontext.Outcome {
@@ -195,6 +210,34 @@ func (h *CodergenHandler) Execute(ctx context.Context, node *dot.Node, pctx *pco
 
 	emitter.EmitLLMEnd(node.ID, truncate(response, 500),
 		session.TotalUsage().InputTokens, session.TotalUsage().OutputTokens)
+
+	// Persist artifacts and conversation history to store
+	if h.Store != nil && h.RunID != "" {
+		_ = h.Store.InsertArtifact(h.RunID, node.ID, "prompt", prompt)
+		_ = h.Store.InsertArtifact(h.RunID, node.ID, "response", response)
+
+		for i, turn := range session.History {
+			ct := store.ConversationTurn{
+				RunID:     h.RunID,
+				NodeID:    node.ID,
+				TurnIndex: i,
+				Role:      string(turn.Role),
+				Content:   turn.Content,
+				Timestamp: turn.Timestamp,
+			}
+			if len(turn.ToolCalls) > 0 {
+				if b, err := json.Marshal(turn.ToolCalls); err == nil {
+					ct.ToolCalls = string(b)
+				}
+			}
+			if len(turn.Results) > 0 {
+				if b, err := json.Marshal(turn.Results); err == nil {
+					ct.ToolResults = string(b)
+				}
+			}
+			_ = h.Store.InsertConversationTurn(ct)
+		}
+	}
 
 	outcome := pcontext.NewSuccessOutcome("Stage completed: "+node.ID).
 		WithContextUpdate("last_stage", node.ID).

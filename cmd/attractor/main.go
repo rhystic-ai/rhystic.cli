@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -18,6 +19,7 @@ import (
 	"github.com/rhystic/attractor/pkg/engine"
 	"github.com/rhystic/attractor/pkg/events"
 	"github.com/rhystic/attractor/pkg/llm"
+	"github.com/rhystic/attractor/pkg/store"
 )
 
 const version = "0.1.0"
@@ -59,6 +61,7 @@ type options struct {
 	prompt      string
 	model       string
 	logsDir     string
+	dbPath      string // SQLite database path; empty disables persistence
 	verbose     bool
 	noColor     bool
 	timeout     time.Duration
@@ -67,9 +70,21 @@ type options struct {
 }
 
 func parseArgs(args []string) (string, options, error) {
+	// Default DB path: ~/.attractor/attractor.db
+	defaultDB := ""
+	if home, err := os.UserHomeDir(); err == nil {
+		defaultDB = filepath.Join(home, ".attractor", "attractor.db")
+	}
+
+	// Allow env var override
+	if envDB := os.Getenv("ATTRACTOR_DB"); envDB != "" {
+		defaultDB = envDB
+	}
+
 	opts := options{
 		model:      "minimax/minimax-m2.5",
 		logsDir:    "./attractor-logs",
+		dbPath:     defaultDB,
 		timeout:    30 * time.Minute,
 		maxRetries: 50,
 	}
@@ -94,6 +109,14 @@ func parseArgs(args []string) (string, options, error) {
 			opts.noColor = true
 		case arg == "-i" || arg == "--interactive":
 			opts.interactive = true
+		case arg == "--db":
+			if i+1 >= len(args) {
+				return "", opts, fmt.Errorf("--db requires a file path")
+			}
+			i++
+			opts.dbPath = args[i]
+		case arg == "--no-db":
+			opts.dbPath = ""
 		case arg == "-f" || arg == "--file":
 			if i+1 >= len(args) {
 				return "", opts, fmt.Errorf("-f requires a file path")
@@ -169,6 +192,8 @@ Run Options:
   -l, --logs <dir>       Logs directory (default: ./attractor-logs)
   -t, --timeout <dur>    Execution timeout (default: 30m)
   --max-retries <n>      Maximum retries per node (default: 50)
+  --db <path>            SQLite database path (default: ~/.attractor/attractor.db)
+  --no-db                Disable database persistence
   -i, --interactive      Enable interactive mode for human gates
   --verbose              Enable verbose output
   --no-color             Disable colored output
@@ -179,6 +204,7 @@ Agent Options:
 
 Environment Variables:
   OPENROUTER_API_KEY     OpenRouter API key (required)
+  ATTRACTOR_DB           Override default SQLite database path
 
 Examples:
   attractor run pipeline.dot
@@ -217,6 +243,21 @@ func runPipeline(opts options, stdin io.Reader, stdout, stderr io.Writer) error 
 
 	eng := engine.New(graph, client, cfg)
 	defer eng.Close()
+
+	// Open persistence store (optional)
+	if opts.dbPath != "" {
+		db, err := store.Open(opts.dbPath)
+		if err != nil {
+			fmt.Fprintf(stderr, "Warning: could not open database: %v\n", err)
+		} else {
+			defer db.Close()
+			eng.Store = db
+
+			// Subscribe a second channel for persistent event storage
+			persistCh := eng.Subscribe()
+			go db.PersistEvents(persistCh, eng.Model())
+		}
+	}
 
 	// Set up event handling
 	eventCh := eng.Subscribe()
@@ -284,6 +325,29 @@ func runAgent(opts options, stdin io.Reader, stdout, stderr io.Writer) error {
 
 	session := agent.NewSession(client, cfg)
 
+	// Open persistence store (optional)
+	var db *store.Store
+	runID := fmt.Sprintf("run_%d", time.Now().UnixNano())
+	if opts.dbPath != "" {
+		var err error
+		db, err = store.Open(opts.dbPath)
+		if err != nil {
+			fmt.Fprintf(stderr, "Warning: could not open database: %v\n", err)
+		} else {
+			defer db.Close()
+			_ = db.CreateRun(store.Run{
+				ID:        runID,
+				Mode:      "agent",
+				Model:     opts.model,
+				StartedAt: time.Now(),
+			})
+
+			// Subscribe for persistent event storage
+			persistCh := session.Events.Subscribe()
+			go db.PersistEvents(persistCh, opts.model)
+		}
+	}
+
 	// Set up event handling
 	eventCh := session.Events.Subscribe()
 	go handleEvents(eventCh, stdout, stderr, opts.verbose, opts.noColor)
@@ -317,12 +381,55 @@ func runAgent(opts options, stdin io.Reader, stdout, stderr io.Writer) error {
 		fmt.Fprintln(stdout, response)
 	}
 
+	// Persist conversation and artifacts to store
+	if db != nil {
+		_ = db.InsertArtifact(runID, "agent", "prompt", opts.prompt)
+		if response != "" {
+			_ = db.InsertArtifact(runID, "agent", "response", response)
+		}
+
+		for i, turn := range session.History {
+			ct := store.ConversationTurn{
+				RunID:     runID,
+				NodeID:    "agent",
+				TurnIndex: i,
+				Role:      string(turn.Role),
+				Content:   turn.Content,
+				Timestamp: turn.Timestamp,
+			}
+			if len(turn.ToolCalls) > 0 {
+				if b, err := json.Marshal(turn.ToolCalls); err == nil {
+					ct.ToolCalls = string(b)
+				}
+			}
+			if len(turn.Results) > 0 {
+				if b, err := json.Marshal(turn.Results); err == nil {
+					ct.ToolResults = string(b)
+				}
+			}
+			_ = db.InsertConversationTurn(ct)
+		}
+	}
+
 	// Print usage and cost
 	usage := session.TotalUsage()
 	model := session.Model()
 	fmt.Fprintf(stdout, "\nTokens: %d input, %d output, %d total\n",
 		usage.InputTokens, usage.OutputTokens, usage.TotalTokens)
 	printCost(stdout, usage, model)
+
+	// Persist run completion
+	if db != nil {
+		total, _, _ := usage.Cost(model)
+		_ = db.UpdateRun(runID, store.RunUpdate{
+			Status:            "success",
+			EndedAt:           time.Now(),
+			DurationMs:        0, // Agent mode doesn't track pipeline duration
+			TotalInputTokens:  usage.InputTokens,
+			TotalOutputTokens: usage.OutputTokens,
+			TotalCostUSD:      total,
+		})
+	}
 
 	return nil
 }

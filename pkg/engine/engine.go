@@ -16,6 +16,7 @@ import (
 	"github.com/rhystic/attractor/pkg/events"
 	"github.com/rhystic/attractor/pkg/handlers"
 	"github.com/rhystic/attractor/pkg/llm"
+	"github.com/rhystic/attractor/pkg/store"
 )
 
 // Config holds engine configuration.
@@ -42,6 +43,7 @@ type Engine struct {
 	Registry *handlers.Registry
 	Events   *events.Emitter
 	Context  *pcontext.Context
+	Store    *store.Store // Optional persistence; nil disables DB writes.
 
 	runID          string
 	completedNodes []string
@@ -103,6 +105,21 @@ func (e *Engine) Run(ctx context.Context) (pcontext.Outcome, error) {
 
 	e.Events.EmitPipelineStart(e.Graph.Name, e.Graph.Goal())
 
+	// Persist run record
+	if e.Store != nil {
+		_ = e.Store.CreateRun(store.Run{
+			ID:        e.runID,
+			Mode:      "pipeline",
+			GraphName: e.Graph.Name,
+			Goal:      e.Graph.Goal(),
+			Model:     e.Model(),
+			StartedAt: time.Now(),
+		})
+	}
+
+	// Wire store into handlers that support persistence
+	e.Registry.SetStore(e.Store, e.runID)
+
 	currentNode := startNode
 	var lastOutcome pcontext.Outcome
 	startTime := time.Now()
@@ -163,6 +180,11 @@ func (e *Engine) Run(ctx context.Context) (pcontext.Outcome, error) {
 			}
 		}
 
+		// Persist context snapshot to DB
+		if e.Store != nil {
+			_ = e.Store.InsertContextSnapshot(e.runID, node.ID, e.Context.All(), e.completedNodes)
+		}
+
 		// Select next edge
 		nextEdge := e.selectEdge(node, outcome)
 		if nextEdge == nil {
@@ -191,6 +213,19 @@ func (e *Engine) Run(ctx context.Context) (pcontext.Outcome, error) {
 
 	duration := time.Since(startTime)
 	e.Events.EmitPipelineEnd(string(lastOutcome.Status), duration.String())
+
+	// Persist run completion
+	if e.Store != nil {
+		total, _, _ := e.totalUsage.Cost(e.Model())
+		_ = e.Store.UpdateRun(e.runID, store.RunUpdate{
+			Status:            string(lastOutcome.Status),
+			EndedAt:           time.Now(),
+			DurationMs:        duration.Milliseconds(),
+			TotalInputTokens:  e.totalUsage.InputTokens,
+			TotalOutputTokens: e.totalUsage.OutputTokens,
+			TotalCostUSD:      total,
+		})
+	}
 
 	return lastOutcome, nil
 }
@@ -471,4 +506,9 @@ func (e *Engine) Model() string {
 // Close cleans up engine resources.
 func (e *Engine) Close() {
 	e.Events.Close()
+}
+
+// RunID returns the unique identifier for this engine's run.
+func (e *Engine) RunID() string {
+	return e.runID
 }
