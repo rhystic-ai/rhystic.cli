@@ -93,7 +93,7 @@ func TestParseArgsOptions(t *testing.T) {
 	args := []string{
 		"run",
 		"-f", "pipeline.dot",
-		"-m", "anthropic/claude-opus-4",
+		"-m", "minimax/minimax-m2.5",
 		"-l", "/tmp/logs",
 		"-t", "1h",
 		"--max-retries", "10",
@@ -115,8 +115,8 @@ func TestParseArgsOptions(t *testing.T) {
 		t.Errorf("Expected dotFile 'pipeline.dot', got '%s'", opts.dotFile)
 	}
 
-	if opts.model != "anthropic/claude-opus-4" {
-		t.Errorf("Expected model 'anthropic/claude-opus-4', got '%s'", opts.model)
+	if opts.model != "minimax/minimax-m2.5" {
+		t.Errorf("Expected model 'minimax/minimax-m2.5', got '%s'", opts.model)
 	}
 
 	if opts.logsDir != "/tmp/logs" {

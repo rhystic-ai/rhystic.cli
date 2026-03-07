@@ -47,7 +47,7 @@ func DefaultConfig() Config {
 		ReasoningEffort:         "high",
 		EnableLoopDetection:     true,
 		LoopDetectionWindow:     10,
-		Model:                   "anthropic/claude-sonnet-4",
+		Model:                   "minimax/minimax-m2.5",
 		ToolOutputLimits: map[string]int{
 			"read_file": 50000,
 			"shell":     100000,
