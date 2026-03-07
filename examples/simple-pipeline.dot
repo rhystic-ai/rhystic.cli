@@ -1,0 +1,44 @@
+// Simple pipeline example for Attractor
+// Run with: attractor run examples/simple-pipeline.dot
+
+digraph SimplePipeline {
+    graph [
+        goal="Implement a simple feature with tests"
+        label="Simple Pipeline"
+    ]
+
+    // Entry and exit points
+    start [shape=Mdiamond, label="Start"]
+    exit  [shape=Msquare, label="Exit"]
+
+    // Workflow stages
+    plan [
+        label="Plan Implementation",
+        prompt="Analyze the goal and create a plan for implementation. List the files that need to be created or modified."
+    ]
+
+    implement [
+        label="Implement Feature",
+        prompt="Implement the feature according to the plan. Create or modify the necessary files."
+    ]
+
+    test [
+        label="Write Tests",
+        prompt="Write tests for the implemented feature. Ensure good coverage."
+    ]
+
+    validate [
+        label="Run Tests",
+        prompt="Run the test suite and verify all tests pass. Fix any failures."
+    ]
+
+    gate [
+        shape=diamond,
+        label="Tests Pass?"
+    ]
+
+    // Flow
+    start -> plan -> implement -> test -> validate -> gate
+    gate -> exit      [label="Yes", condition="outcome=success", weight="10"]
+    gate -> implement [label="No",  condition="outcome!=success"]
+}

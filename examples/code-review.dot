@@ -1,0 +1,50 @@
+// Code review pipeline with human gate
+// Run with: attractor run -i examples/code-review.dot
+
+digraph CodeReview {
+    graph [
+        goal="Review code changes and provide feedback"
+        label="Code Review Pipeline"
+    ]
+
+    start [shape=Mdiamond, label="Start"]
+    exit  [shape=Msquare, label="Exit"]
+
+    // Analysis phase
+    analyze [
+        label="Analyze Changes",
+        prompt="Review the current changes (git diff). Identify potential issues, improvements, and security concerns."
+    ]
+
+    // Human review gate
+    review [
+        shape=hexagon,
+        label="Review Changes",
+        type="wait.human"
+    ]
+
+    // Actions based on human decision
+    approve [
+        label="Approve Changes",
+        prompt="The changes have been approved. Create a summary of the approved changes."
+    ]
+
+    request_changes [
+        label="Request Changes",
+        prompt="Document the requested changes that need to be made before approval."
+    ]
+
+    implement_fixes [
+        label="Implement Fixes",
+        prompt="Implement the requested changes based on the review feedback."
+    ]
+
+    // Flow
+    start -> analyze -> review
+
+    review -> approve         [label="[A] Approve"]
+    review -> request_changes [label="[R] Request Changes"]
+
+    approve -> exit
+    request_changes -> implement_fixes -> analyze
+}
