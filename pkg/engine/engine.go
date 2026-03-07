@@ -46,6 +46,7 @@ type Engine struct {
 	runID          string
 	completedNodes []string
 	nodeOutcomes   map[string]pcontext.Outcome
+	totalUsage     llm.Usage // Cumulative usage across all nodes
 }
 
 // New creates a new engine for a graph.
@@ -65,6 +66,20 @@ func New(graph *dot.Graph, llmClient *llm.Client, cfg Config) *Engine {
 
 // Run executes the pipeline and returns the final outcome.
 func (e *Engine) Run(ctx context.Context) (pcontext.Outcome, error) {
+	// Subscribe to events to track usage
+	eventCh := e.Events.Subscribe()
+	go func() {
+		for event := range eventCh {
+			if event.Type == events.EventLLMEnd {
+				e.totalUsage = e.totalUsage.Add(llm.Usage{
+					InputTokens:  event.Data.InputTokens,
+					OutputTokens: event.Data.OutputTokens,
+					TotalTokens:  event.Data.InputTokens + event.Data.OutputTokens,
+				})
+			}
+		}
+	}()
+
 	// Initialize context with graph attributes
 	e.mirrorGraphAttributes()
 
@@ -437,6 +452,20 @@ func normalizeLabel(label string) string {
 // Subscribe returns the event stream for this engine.
 func (e *Engine) Subscribe() <-chan events.Event {
 	return e.Events.Subscribe()
+}
+
+// TotalUsage returns cumulative token usage across all nodes.
+func (e *Engine) TotalUsage() llm.Usage {
+	return e.totalUsage
+}
+
+// Model returns the default model used by this engine.
+func (e *Engine) Model() string {
+	// Use graph-level model if set
+	if model := e.Graph.Attributes["llm_model"]; model != "" {
+		return model
+	}
+	return "minimax/minimax-m2.5"
 }
 
 // Close cleans up engine resources.

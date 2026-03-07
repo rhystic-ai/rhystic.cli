@@ -248,6 +248,14 @@ func runPipeline(opts options, stdin io.Reader, stdout, stderr io.Writer) error 
 	}
 
 	printResult(stdout, opts.noColor, outcome)
+
+	// Print usage and cost
+	usage := eng.TotalUsage()
+	model := eng.Model()
+	fmt.Fprintf(stdout, "\nTokens: %d input, %d output, %d total\n",
+		usage.InputTokens, usage.OutputTokens, usage.TotalTokens)
+	printCost(stdout, usage, model)
+
 	return nil
 }
 
@@ -309,10 +317,12 @@ func runAgent(opts options, stdin io.Reader, stdout, stderr io.Writer) error {
 		fmt.Fprintln(stdout, response)
 	}
 
-	// Print usage
+	// Print usage and cost
 	usage := session.TotalUsage()
+	model := session.Model()
 	fmt.Fprintf(stdout, "\nTokens: %d input, %d output, %d total\n",
 		usage.InputTokens, usage.OutputTokens, usage.TotalTokens)
+	printCost(stdout, usage, model)
 
 	return nil
 }
@@ -566,4 +576,13 @@ func truncateString(s string, max int) string {
 		return s
 	}
 	return s[:max] + "..."
+}
+
+func printCost(w io.Writer, usage llm.Usage, model string) {
+	total, inputCost, outputCost := usage.Cost(model)
+	if llm.HasPricing(model) {
+		fmt.Fprintf(w, "Cost: $%.4f (input: $%.4f, output: $%.4f)\n", total, inputCost, outputCost)
+	} else {
+		fmt.Fprintf(w, "Cost: $0.0000 (pricing unavailable for %s)\n", model)
+	}
 }
