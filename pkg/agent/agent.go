@@ -91,13 +91,30 @@ type Session struct {
 	totalTokens   llm.Usage
 }
 
+// SessionOption configures a Session during construction.
+type SessionOption func(*Session)
+
+// WithToolRegistry sets a custom tool registry instead of the default.
+func WithToolRegistry(reg *tools.Registry) SessionOption {
+	return func(s *Session) {
+		s.ToolRegistry = reg
+	}
+}
+
+// WithExecEnv sets a custom execution environment.
+func WithExecEnv(env tools.ExecutionEnvironment) SessionOption {
+	return func(s *Session) {
+		s.ExecEnv = env
+	}
+}
+
 // NewSession creates a new agent session.
-func NewSession(client *llm.Client, cfg Config) *Session {
+func NewSession(client *llm.Client, cfg Config, opts ...SessionOption) *Session {
 	if cfg.Model == "" {
 		cfg.Model = DefaultConfig().Model
 	}
 
-	return &Session{
+	s := &Session{
 		ID:           generateID(),
 		Config:       cfg,
 		State:        StateIdle,
@@ -107,6 +124,12 @@ func NewSession(client *llm.Client, cfg Config) *Session {
 		Events:       events.NewEmitter(generateID()),
 		abortCh:      make(chan struct{}),
 	}
+
+	for _, opt := range opts {
+		opt(s)
+	}
+
+	return s
 }
 
 // Submit processes user input through the agent loop.

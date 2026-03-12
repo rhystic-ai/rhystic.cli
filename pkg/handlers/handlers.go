@@ -15,7 +15,9 @@ import (
 	"github.com/rhystic/attractor/pkg/dot"
 	"github.com/rhystic/attractor/pkg/events"
 	"github.com/rhystic/attractor/pkg/llm"
+	"github.com/rhystic/attractor/pkg/roles"
 	"github.com/rhystic/attractor/pkg/store"
+	"github.com/rhystic/attractor/pkg/tools"
 )
 
 // Handler executes a node in the pipeline.
@@ -153,6 +155,12 @@ func (h *CodergenHandler) Execute(ctx context.Context, node *dot.Node, pctx *pco
 		prompt = strings.ReplaceAll(prompt, "$goal", graph.Goal())
 	}
 
+	// Expand {file:./path} references
+	baseDir, _ := os.Getwd()
+	if expanded, err := roles.ExpandFileRef(prompt, baseDir); err == nil {
+		prompt = expanded
+	}
+
 	// Create stage directory
 	stageDir := filepath.Join(logsRoot, node.ID)
 	if err := os.MkdirAll(stageDir, 0755); err != nil {
@@ -186,7 +194,29 @@ func (h *CodergenHandler) Execute(ctx context.Context, node *dot.Node, pctx *pco
 		cfg.ReasoningEffort = effort
 	}
 
-	session := agent.NewSession(h.Client, cfg)
+	// Load role definition and build session options
+	var sessionOpts []agent.SessionOption
+
+	if roleName := node.Role(); roleName != "" {
+		role, err := roles.Load(roleName)
+		if err != nil {
+			emitter.EmitLog("warn", fmt.Sprintf("load role %q: %v (using defaults)", roleName, err))
+		} else {
+			// Set role's system prompt with template expansion
+			if expanded, err := role.ExpandPrompt(baseDir); err == nil && expanded != "" {
+				cfg.SystemPrompt = expanded
+			}
+
+			// Build restricted tool registry
+			reg := tools.RegistryForRole(role)
+			sessionOpts = append(sessionOpts, agent.WithToolRegistry(reg))
+
+			emitter.EmitLog("info", fmt.Sprintf("loaded role %q (%s) with %d tools",
+				role.Name, role.Description, len(reg.All())))
+		}
+	}
+
+	session := agent.NewSession(h.Client, cfg, sessionOpts...)
 
 	// Subscribe to events
 	eventCh := session.Events.Subscribe()

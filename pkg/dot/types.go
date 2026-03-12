@@ -129,6 +129,11 @@ func (n *Node) LLMProvider() string {
 	return n.Attributes["llm_provider"]
 }
 
+// Role returns the role name assigned to this node.
+func (n *Node) Role() string {
+	return n.Attributes["role"]
+}
+
 // ReasoningEffort returns the reasoning effort level.
 func (n *Node) ReasoningEffort() string {
 	if v, ok := n.Attributes["reasoning_effort"]; ok {

@@ -19,7 +19,9 @@ import (
 	"github.com/rhystic/attractor/pkg/engine"
 	"github.com/rhystic/attractor/pkg/events"
 	"github.com/rhystic/attractor/pkg/llm"
+	"github.com/rhystic/attractor/pkg/roles"
 	"github.com/rhystic/attractor/pkg/store"
+	"github.com/rhystic/attractor/pkg/tools"
 )
 
 const version = "0.1.0"
@@ -60,6 +62,7 @@ type options struct {
 	dotFile     string
 	prompt      string
 	model       string
+	role        string // Role name for agent command
 	logsDir     string
 	dbPath      string // SQLite database path; empty disables persistence
 	verbose     bool
@@ -129,6 +132,12 @@ func parseArgs(args []string) (string, options, error) {
 			}
 			i++
 			opts.model = args[i]
+		case arg == "-r" || arg == "--role":
+			if i+1 >= len(args) {
+				return "", opts, fmt.Errorf("-r requires a role name")
+			}
+			i++
+			opts.role = args[i]
 		case arg == "-l" || arg == "--logs":
 			if i+1 >= len(args) {
 				return "", opts, fmt.Errorf("-l requires a directory path")
@@ -200,6 +209,8 @@ Run Options:
 
 Agent Options:
   -m, --model <name>     LLM model (default: minimax/minimax-m2.5)
+  -r, --role <name>      Role for the agent (researcher, project-manager,
+                          developer, quality, reviewer, devops)
   --verbose              Enable verbose output
 
 Environment Variables:
@@ -323,7 +334,32 @@ func runAgent(opts options, stdin io.Reader, stdout, stderr io.Writer) error {
 	cfg := agent.DefaultConfig()
 	cfg.Model = opts.model
 
-	session := agent.NewSession(client, cfg)
+	var sessionOpts []agent.SessionOption
+
+	// Load role if specified
+	if opts.role != "" {
+		role, err := roles.Load(opts.role)
+		if err != nil {
+			return fmt.Errorf("load role %q: %w", opts.role, err)
+		}
+
+		// Set role's system prompt with template expansion
+		wd, _ := os.Getwd()
+		if expanded, err := role.ExpandPrompt(wd); err == nil && expanded != "" {
+			cfg.SystemPrompt = expanded
+		}
+
+		// Build restricted tool registry
+		reg := tools.RegistryForRole(role)
+		sessionOpts = append(sessionOpts, agent.WithToolRegistry(reg))
+
+		if opts.verbose {
+			fmt.Fprintf(stderr, "Role: %s (%s)\n", role.Name, role.Description)
+			fmt.Fprintf(stderr, "Tools: %v\n", reg.Names())
+		}
+	}
+
+	session := agent.NewSession(client, cfg, sessionOpts...)
 
 	// Open persistence store (optional)
 	var db *store.Store
@@ -367,6 +403,9 @@ func runAgent(opts options, stdin io.Reader, stdout, stderr io.Writer) error {
 	}()
 
 	printHeader(stdout, opts.noColor, "Running agent with model: %s", opts.model)
+	if opts.role != "" {
+		fmt.Fprintf(stdout, "Role: %s\n", opts.role)
+	}
 	fmt.Fprintln(stdout)
 
 	if err := session.Submit(ctx, opts.prompt); err != nil {
