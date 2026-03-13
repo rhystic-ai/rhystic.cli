@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -350,17 +351,8 @@ func runAgent(opts options, stdin io.Reader, stdout, stderr io.Writer) error {
 		if err != nil {
 			return fmt.Errorf("parse context: %w", err)
 		}
-		// Build context string
-		var contextStr string
-		for key, value := range ctxValues {
-			if key == "unnamed" {
-				contextStr = value + "\n\n"
-			} else {
-				contextStr += fmt.Sprintf("%s: %s\n", key, value)
-			}
-		}
-		if contextStr != "" {
-			opts.prompt = contextStr + opts.prompt
+		if s := buildContextString(ctxValues); s != "" {
+			opts.prompt = s + "\n" + opts.prompt
 		}
 	}
 
@@ -388,14 +380,11 @@ func runAgent(opts options, stdin io.Reader, stdout, stderr io.Writer) error {
 		// Build context string for template expansion
 		var contextStr string
 		if len(opts.context) > 0 {
-			ctxValues, _ := parseContextValues(opts.context)
-			for key, value := range ctxValues {
-				if key == "unnamed" {
-					contextStr = value + "\n" + contextStr
-				} else {
-					contextStr += fmt.Sprintf("%s: %s\n", key, value)
-				}
+			ctxValues, err := parseContextValues(opts.context)
+			if err != nil {
+				return fmt.Errorf("parse context: %w", err)
 			}
+			contextStr = buildContextString(ctxValues)
 		}
 		if expanded, err := role.ExpandPrompt(wd, contextStr); err == nil && expanded != "" {
 			cfg.SystemPrompt = expanded
@@ -846,46 +835,100 @@ func printCost(w io.Writer, usage llm.Usage, model string) {
 	}
 }
 
-// resolveContextValue resolves a context value.
-// If the value starts with '@', it reads the file contents.
-// Otherwise, it returns the literal string.
+// buildContextString formats a context map as a human-readable string.
+// Keys are sorted alphabetically. The "unnamed" key (from bare @file references)
+// is prepended before all named key: value lines.
+func buildContextString(ctxValues map[string]string) string {
+	if len(ctxValues) == 0 {
+		return ""
+	}
+	// Sort keys for deterministic output.
+	keys := make([]string, 0, len(ctxValues))
+	for k := range ctxValues {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	var b strings.Builder
+	// Unnamed (bare @file) content first.
+	if v, ok := ctxValues["unnamed"]; ok {
+		b.WriteString(v)
+		b.WriteString("\n")
+	}
+	// Named keys in sorted order.
+	for _, k := range keys {
+		if k == "unnamed" {
+			continue
+		}
+		fmt.Fprintf(&b, "%s: %s\n", k, ctxValues[k])
+	}
+	return b.String()
+}
+
+// resolveFileRef reads the file at path (trimming surrounding whitespace).
+// It is the implementation detail for @ references in context values.
+func resolveFileRef(path string) (string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", fmt.Errorf("empty file path")
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read context file %q: %w", path, err)
+	}
+	return string(content), nil
+}
+
+// resolveContextValue resolves a single context value.
+// If the value starts with '@', it reads the referenced file's contents.
+// Otherwise, it returns the literal string unchanged.
 func resolveContextValue(val string) (string, error) {
 	if strings.HasPrefix(val, "@") {
-		filePath := strings.TrimSpace(val[1:])
-		if filePath == "" {
-			return "", fmt.Errorf("empty file path after @")
-		}
-		content, err := os.ReadFile(filePath)
-		if err != nil {
-			return "", fmt.Errorf("read context file %q: %w", filePath, err)
-		}
-		return string(content), nil
+		return resolveFileRef(val[1:])
 	}
 	return val, nil
 }
 
-// parseContextValues parses context flags into a map of key->value.
-// Format: "key=value" or just "@file" (stored under "unnamed" key)
+// parseContextValues parses -c/--context flags into a map of key→value.
+//
+// Supported formats:
+//
+//	key=value        Named context entry; value is a literal string.
+//	key=@file.txt    Named context entry; value is read from the file.
+//	@file.txt        Unnamed context entry stored under the "unnamed" key.
+//	                 Multiple unnamed entries are concatenated with "\n\n---\n\n".
 func parseContextValues(contextFlags []string) (map[string]string, error) {
 	result := make(map[string]string)
 	for _, flag := range contextFlags {
 		if strings.HasPrefix(flag, "@") {
-			// File reference - read and store under "unnamed"
-			content, err := resolveContextValue(flag)
+			// Bare file reference — stored under "unnamed", concatenated if multiple.
+			content, err := resolveFileRef(flag[1:])
 			if err != nil {
 				return nil, err
 			}
-			result["unnamed"] = content
-		} else if idx := strings.Index(flag, "="); idx > 0 {
-			// key=value format
+			if existing, ok := result["unnamed"]; ok {
+				result["unnamed"] = existing + "\n\n---\n\n" + content
+			} else {
+				result["unnamed"] = content
+			}
+		} else if idx := strings.Index(flag, "="); idx >= 0 {
+			// key=value (or key=@file) format.
 			key := strings.TrimSpace(flag[:idx])
-			value := strings.TrimSpace(flag[idx+1:])
 			if key == "" {
 				return nil, fmt.Errorf("empty key in context: %q", flag)
 			}
+			value := flag[idx+1:] // preserve whitespace in values
+			// Resolve @file reference in value.
+			if strings.HasPrefix(value, "@") {
+				var err error
+				value, err = resolveFileRef(value[1:])
+				if err != nil {
+					return nil, err
+				}
+			}
 			result[key] = value
 		} else {
-			// Treat as key=value without equals - store as-is
+			// Bare word with no '=' — store as key with empty value.
 			result[flag] = ""
 		}
 	}

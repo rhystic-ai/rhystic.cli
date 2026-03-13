@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -209,20 +210,9 @@ func (h *CodergenHandler) Execute(ctx context.Context, node *dot.Node, pctx *pco
 		if err != nil {
 			emitter.EmitLog("warn", fmt.Sprintf("load role %q: %v (using defaults)", roleName, err))
 		} else {
-			// Set role's system prompt with template expansion
-			// Build context string from pcontext for template
-			var contextStr string
-			allVals := pctx.All()
-			for k, v := range allVals {
-				if strings.HasPrefix(k, "user.") {
-					key := strings.TrimPrefix(k, "user.")
-					if key == "unnamed" {
-						contextStr = fmt.Sprintf("%v", v) + "\n" + contextStr
-					} else {
-						contextStr += fmt.Sprintf("%s: %v\n", key, v)
-					}
-				}
-			}
+			// Set role's system prompt with template expansion.
+			// Build context string from pcontext (sorted for determinism).
+			contextStr := expandContextVars("$context", pctx)
 			if expanded, err := role.ExpandPrompt(baseDir, contextStr); err == nil && expanded != "" {
 				cfg.SystemPrompt = expanded
 			}
@@ -465,44 +455,60 @@ func truncate(s string, max int) string {
 }
 
 // expandContextVars expands $context.key and $context variables in a prompt.
-// $context.key is replaced with the value from pcontext (under user.* namespace).
-// A bare $context (not followed by a dot+word) is replaced with all user context.
+//
+// Two forms are supported:
+//
+//	$context.key  Replaced with the single value stored under "user.<key>" in
+//	              pctx.  Left unchanged if the key is not found.
+//	$context      Replaced with all user context formatted as a string.
+//	              Keys are sorted alphabetically; the "unnamed" value is
+//	              prepended before the key: value lines.
+//
+// $context.key patterns are expanded after $context so that a bare $context
+// replacement can never accidentally swallow a dotted reference.
 func expandContextVars(prompt string, pctx *pcontext.Context) string {
-	// First: expand bare $context (not followed by .word) with all user context.
-	// We do this replacement first using a negative lookahead-style approach:
-	// replace bare "$context" that isn't part of "$context.key".
-	bareRe := regexp.MustCompile(`\$context(?:\b[^.])|\$context$`)
+	// Build sorted context string once (only if bare $context is present).
+	bareRe := regexp.MustCompile(`\$context(?:[^.\w]|$)`)
 	if bareRe.MatchString(prompt) {
 		allVals := pctx.All()
-		var contextStr string
-		for k, v := range allVals {
+
+		// Collect user keys and sort for deterministic output.
+		var userKeys []string
+		for k := range allVals {
 			if strings.HasPrefix(k, "user.") {
-				key := strings.TrimPrefix(k, "user.")
-				if key == "unnamed" {
-					contextStr = fmt.Sprintf("%v", v) + "\n" + contextStr
-				} else {
-					contextStr += fmt.Sprintf("%s: %v\n", key, v)
-				}
+				userKeys = append(userKeys, k)
 			}
 		}
-		// Replace only bare $context (not $context.key)
-		prompt = bareRe.ReplaceAllStringFunc(prompt, func(match string) string {
-			// The match includes the trailing char (e.g. space); preserve it
-			suffix := ""
-			if len(match) > len("$context") {
-				suffix = match[len("$context"):]
+		sort.Strings(userKeys)
+
+		var b strings.Builder
+		// Unnamed (bare @file) content first.
+		if v, ok := allVals["user.unnamed"]; ok {
+			fmt.Fprintf(&b, "%v\n", v)
+		}
+		for _, k := range userKeys {
+			key := strings.TrimPrefix(k, "user.")
+			if key == "unnamed" {
+				continue
 			}
+			fmt.Fprintf(&b, "%s: %v\n", key, allVals[k])
+		}
+		contextStr := b.String()
+
+		// Replace bare $context, preserving the non-dot character that follows.
+		prompt = bareRe.ReplaceAllStringFunc(prompt, func(match string) string {
+			suffix := match[len("$context"):]
 			return contextStr + suffix
 		})
 	}
 
-	// Second: expand $context.key patterns
+	// Expand $context.key patterns.
 	dotRe := regexp.MustCompile(`\$context\.(\w+)`)
 	prompt = dotRe.ReplaceAllStringFunc(prompt, func(match string) string {
-		key := match[9:] // Remove "$context." prefix
+		key := match[9:] // strip "$context."
 		value, ok := pctx.Get("user." + key)
 		if !ok {
-			return match // Keep original if not found
+			return match
 		}
 		return fmt.Sprintf("%v", value)
 	})

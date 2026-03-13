@@ -68,8 +68,10 @@ func New(graph *dot.Graph, llmClient *llm.Client, cfg Config) *Engine {
 
 // Run executes the pipeline and returns the final outcome.
 func (e *Engine) Run(ctx context.Context) (pcontext.Outcome, error) {
-	// Subscribe to events to track usage
+	// Subscribe to events to track cumulative token usage.
+	// Unsubscribe on return so the goroutine can exit cleanly.
 	eventCh := e.Events.Subscribe()
+	defer e.Events.Unsubscribe(eventCh)
 	go func() {
 		for event := range eventCh {
 			if event.Type == events.EventLLMEnd {
