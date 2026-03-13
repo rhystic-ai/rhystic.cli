@@ -31,6 +31,7 @@ type TemplateData struct {
 	Platform string
 	WorkDir  string
 	Time     string
+	Context  string
 }
 
 // Parse parses a role definition from markdown with YAML frontmatter.
@@ -78,7 +79,8 @@ func Parse(content string) (RoleDefinition, error) {
 }
 
 // ExpandPrompt expands template variables in the role's system prompt.
-func (r *RoleDefinition) ExpandPrompt(workDir string) (string, error) {
+// It accepts an optional context string that will be available as {{.Context}} in templates.
+func (r *RoleDefinition) ExpandPrompt(workDir string, contextOverride ...string) (string, error) {
 	if r.SystemPrompt == "" {
 		return "", nil
 	}
@@ -87,6 +89,11 @@ func (r *RoleDefinition) ExpandPrompt(workDir string) (string, error) {
 		Platform: runtime.GOOS,
 		WorkDir:  workDir,
 		Time:     time.Now().Format(time.RFC3339),
+	}
+
+	// If contextOverride is provided, use it
+	if len(contextOverride) > 0 {
+		data.Context = contextOverride[0]
 	}
 
 	tmpl, err := template.New("prompt").Parse(r.SystemPrompt)

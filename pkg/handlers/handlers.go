@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -155,6 +156,9 @@ func (h *CodergenHandler) Execute(ctx context.Context, node *dot.Node, pctx *pco
 		prompt = strings.ReplaceAll(prompt, "$goal", graph.Goal())
 	}
 
+	// Expand $context.* variables from pcontext
+	prompt = expandContextVars(prompt, pctx)
+
 	// Expand {file:./path} references
 	baseDir, _ := os.Getwd()
 	if expanded, err := roles.ExpandFileRef(prompt, baseDir); err == nil {
@@ -177,6 +181,9 @@ func (h *CodergenHandler) Execute(ctx context.Context, node *dot.Node, pctx *pco
 	if h.Client == nil {
 		// Simulation mode
 		response := fmt.Sprintf("[Simulated] Response for stage: %s", node.ID)
+		if roleName := node.Role(); roleName != "" {
+			response += fmt.Sprintf(" (role: %s)", roleName)
+		}
 		if err := os.WriteFile(filepath.Join(stageDir, "response.md"), []byte(response), 0644); err != nil {
 			return pcontext.NewFailOutcome(fmt.Sprintf("write response: %v", err))
 		}
@@ -203,7 +210,20 @@ func (h *CodergenHandler) Execute(ctx context.Context, node *dot.Node, pctx *pco
 			emitter.EmitLog("warn", fmt.Sprintf("load role %q: %v (using defaults)", roleName, err))
 		} else {
 			// Set role's system prompt with template expansion
-			if expanded, err := role.ExpandPrompt(baseDir); err == nil && expanded != "" {
+			// Build context string from pcontext for template
+			var contextStr string
+			allVals := pctx.All()
+			for k, v := range allVals {
+				if strings.HasPrefix(k, "user.") {
+					key := strings.TrimPrefix(k, "user.")
+					if key == "unnamed" {
+						contextStr = fmt.Sprintf("%v", v) + "\n" + contextStr
+					} else {
+						contextStr += fmt.Sprintf("%s: %v\n", key, v)
+					}
+				}
+			}
+			if expanded, err := role.ExpandPrompt(baseDir, contextStr); err == nil && expanded != "" {
 				cfg.SystemPrompt = expanded
 			}
 
@@ -442,4 +462,50 @@ func truncate(s string, max int) string {
 		return s
 	}
 	return s[:max] + "..."
+}
+
+// expandContextVars expands $context.key and $context variables in a prompt.
+// $context.key is replaced with the value from pcontext (under user.* namespace).
+// A bare $context (not followed by a dot+word) is replaced with all user context.
+func expandContextVars(prompt string, pctx *pcontext.Context) string {
+	// First: expand bare $context (not followed by .word) with all user context.
+	// We do this replacement first using a negative lookahead-style approach:
+	// replace bare "$context" that isn't part of "$context.key".
+	bareRe := regexp.MustCompile(`\$context(?:\b[^.])|\$context$`)
+	if bareRe.MatchString(prompt) {
+		allVals := pctx.All()
+		var contextStr string
+		for k, v := range allVals {
+			if strings.HasPrefix(k, "user.") {
+				key := strings.TrimPrefix(k, "user.")
+				if key == "unnamed" {
+					contextStr = fmt.Sprintf("%v", v) + "\n" + contextStr
+				} else {
+					contextStr += fmt.Sprintf("%s: %v\n", key, v)
+				}
+			}
+		}
+		// Replace only bare $context (not $context.key)
+		prompt = bareRe.ReplaceAllStringFunc(prompt, func(match string) string {
+			// The match includes the trailing char (e.g. space); preserve it
+			suffix := ""
+			if len(match) > len("$context") {
+				suffix = match[len("$context"):]
+			}
+			return contextStr + suffix
+		})
+	}
+
+	// Second: expand $context.key patterns
+	dotRe := regexp.MustCompile(`\$context\.(\w+)`)
+	prompt = dotRe.ReplaceAllStringFunc(prompt, func(match string) string {
+		key := match[9:] // Remove "$context." prefix
+		value, ok := pctx.Get("user." + key)
+		if !ok {
+			return match // Keep original if not found
+		}
+		return fmt.Sprintf("%v", value)
+	})
+
+	return prompt
 }

@@ -70,6 +70,7 @@ type options struct {
 	timeout     time.Duration
 	maxRetries  int
 	interactive bool
+	context     []string // Context values: "key=value" or "@file"
 }
 
 func parseArgs(args []string) (string, options, error) {
@@ -164,6 +165,12 @@ func parseArgs(args []string) (string, options, error) {
 				return "", opts, fmt.Errorf("invalid max-retries: %w", err)
 			}
 			opts.maxRetries = n
+		case arg == "-c" || arg == "--context":
+			if i+1 >= len(args) {
+				return "", opts, fmt.Errorf("-c requires a context value (key=value or @file)")
+			}
+			i++
+			opts.context = append(opts.context, args[i])
 		case strings.HasPrefix(arg, "-"):
 			return "", opts, fmt.Errorf("unknown flag: %s", arg)
 		default:
@@ -204,6 +211,7 @@ Run Options:
   --db <path>            SQLite database path (default: ~/.attractor/attractor.db)
   --no-db                Disable database persistence
   -i, --interactive      Enable interactive mode for human gates
+  -c, --context <val>    Inject context (key=value or @file); repeatable
   --verbose              Enable verbose output
   --no-color             Disable colored output
 
@@ -211,6 +219,7 @@ Agent Options:
   -m, --model <name>     LLM model (default: minimax/minimax-m2.5)
   -r, --role <name>      Role for the agent (researcher, project-manager,
                           developer, quality, reviewer, devops)
+  -c, --context <val>    Inject context (key=value or @file); repeatable
   --verbose              Enable verbose output
 
 Environment Variables:
@@ -254,6 +263,17 @@ func runPipeline(opts options, stdin io.Reader, stdout, stderr io.Writer) error 
 
 	eng := engine.New(graph, client, cfg)
 	defer eng.Close()
+
+	// Inject context values into engine context
+	if len(opts.context) > 0 {
+		ctxValues, err := parseContextValues(opts.context)
+		if err != nil {
+			return fmt.Errorf("parse context: %w", err)
+		}
+		for key, value := range ctxValues {
+			eng.Context.Set("user."+key, value)
+		}
+	}
 
 	// Open persistence store (optional)
 	if opts.dbPath != "" {
@@ -324,6 +344,26 @@ func runAgent(opts options, stdin io.Reader, stdout, stderr io.Writer) error {
 		}
 	}
 
+	// Prepend context to prompt if provided
+	if len(opts.context) > 0 {
+		ctxValues, err := parseContextValues(opts.context)
+		if err != nil {
+			return fmt.Errorf("parse context: %w", err)
+		}
+		// Build context string
+		var contextStr string
+		for key, value := range ctxValues {
+			if key == "unnamed" {
+				contextStr = value + "\n\n"
+			} else {
+				contextStr += fmt.Sprintf("%s: %s\n", key, value)
+			}
+		}
+		if contextStr != "" {
+			opts.prompt = contextStr + opts.prompt
+		}
+	}
+
 	// Create LLM client
 	client, err := llm.NewClientFromEnv()
 	if err != nil {
@@ -345,7 +385,19 @@ func runAgent(opts options, stdin io.Reader, stdout, stderr io.Writer) error {
 
 		// Set role's system prompt with template expansion
 		wd, _ := os.Getwd()
-		if expanded, err := role.ExpandPrompt(wd); err == nil && expanded != "" {
+		// Build context string for template expansion
+		var contextStr string
+		if len(opts.context) > 0 {
+			ctxValues, _ := parseContextValues(opts.context)
+			for key, value := range ctxValues {
+				if key == "unnamed" {
+					contextStr = value + "\n" + contextStr
+				} else {
+					contextStr += fmt.Sprintf("%s: %s\n", key, value)
+				}
+			}
+		}
+		if expanded, err := role.ExpandPrompt(wd, contextStr); err == nil && expanded != "" {
 			cfg.SystemPrompt = expanded
 		}
 
@@ -792,4 +844,50 @@ func printCost(w io.Writer, usage llm.Usage, model string) {
 	} else {
 		fmt.Fprintf(w, "Cost: $0.0000 (pricing unavailable for %s)\n", model)
 	}
+}
+
+// resolveContextValue resolves a context value.
+// If the value starts with '@', it reads the file contents.
+// Otherwise, it returns the literal string.
+func resolveContextValue(val string) (string, error) {
+	if strings.HasPrefix(val, "@") {
+		filePath := strings.TrimSpace(val[1:])
+		if filePath == "" {
+			return "", fmt.Errorf("empty file path after @")
+		}
+		content, err := os.ReadFile(filePath)
+		if err != nil {
+			return "", fmt.Errorf("read context file %q: %w", filePath, err)
+		}
+		return string(content), nil
+	}
+	return val, nil
+}
+
+// parseContextValues parses context flags into a map of key->value.
+// Format: "key=value" or just "@file" (stored under "unnamed" key)
+func parseContextValues(contextFlags []string) (map[string]string, error) {
+	result := make(map[string]string)
+	for _, flag := range contextFlags {
+		if strings.HasPrefix(flag, "@") {
+			// File reference - read and store under "unnamed"
+			content, err := resolveContextValue(flag)
+			if err != nil {
+				return nil, err
+			}
+			result["unnamed"] = content
+		} else if idx := strings.Index(flag, "="); idx > 0 {
+			// key=value format
+			key := strings.TrimSpace(flag[:idx])
+			value := strings.TrimSpace(flag[idx+1:])
+			if key == "" {
+				return nil, fmt.Errorf("empty key in context: %q", flag)
+			}
+			result[key] = value
+		} else {
+			// Treat as key=value without equals - store as-is
+			result[flag] = ""
+		}
+	}
+	return result, nil
 }

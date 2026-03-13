@@ -1,0 +1,13 @@
+# Binary
+/attractor
+
+# Logs and test output
+attractor-logs/
+test-logs/
+coverage.out
+
+# Database
+*.db
+
+# OS files
+.DS_Store
