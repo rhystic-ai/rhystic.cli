@@ -524,6 +524,20 @@ func validatePipeline(opts options, stdout, stderr io.Writer) error {
 		}
 	}
 
+	// Validate role attributes
+	var roleNodes []string
+	for id, node := range graph.Nodes {
+		roleName := node.Role()
+		if roleName == "" {
+			continue
+		}
+		if _, err := roles.Load(roleName); err != nil {
+			warnings = append(warnings, fmt.Sprintf("Node '%s' references unknown role %q", id, roleName))
+		} else {
+			roleNodes = append(roleNodes, id)
+		}
+	}
+
 	// Print results
 	fmt.Fprintf(stdout, "Validating: %s\n\n", filepath.Base(opts.dotFile))
 
@@ -549,6 +563,9 @@ func validatePipeline(opts options, stdout, stderr io.Writer) error {
 		fmt.Fprintf(stdout, "Edges: %d\n", len(graph.Edges))
 		if graph.Goal() != "" {
 			fmt.Fprintf(stdout, "Goal: %s\n", graph.Goal())
+		}
+		if len(roleNodes) > 0 {
+			fmt.Fprintf(stdout, "Roles: %d node(s) with role assignments\n", len(roleNodes))
 		}
 		fmt.Fprintln(stdout)
 		fmt.Fprintln(stdout, "Validation passed!")

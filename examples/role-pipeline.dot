@@ -1,0 +1,67 @@
+// Role-based pipeline example for Attractor
+// Demonstrates mixed roles with specialized system prompts and tool restrictions.
+// Run with: attractor run examples/role-pipeline.dot
+
+digraph RolePipeline {
+    graph [
+        goal="Implement and ship a new feature with full review cycle"
+        label="Role Pipeline"
+    ]
+
+    // Entry and exit points
+    start [shape=Mdiamond, label="Start"]
+    exit  [shape=Msquare, label="Exit"]
+
+    // Phase 1: Research (read-only exploration)
+    research [
+        label="Research Codebase",
+        role="researcher",
+        prompt="Explore the project structure and identify the files relevant to $goal. Document key patterns, dependencies, and integration points."
+    ]
+
+    // Phase 2: Planning (read-only coordination)
+    plan [
+        label="Create Work Plan",
+        role="project-manager",
+        prompt="Based on the research findings, break $goal into concrete tasks. Estimate complexity and define acceptance criteria for each task."
+    ]
+
+    // Phase 3: Implementation (full tool access)
+    implement [
+        label="Implement Feature",
+        role="developer",
+        prompt="Implement $goal according to the work plan. Write clean, idiomatic code following existing conventions."
+    ]
+
+    // Phase 4: Testing (full tool access)
+    test [
+        label="Test Feature",
+        role="quality",
+        prompt="Write comprehensive tests for the implementation. Run the test suite and verify all tests pass. Fix any failures."
+    ]
+
+    // Phase 5: Review (read-only audit)
+    review [
+        label="Code Review",
+        role="reviewer",
+        prompt="Review all code changes for correctness, style, security, and test coverage. Provide a pass/fail verdict."
+    ]
+
+    gate [
+        shape=diamond,
+        label="Review Passed?"
+    ]
+
+    // Phase 6: Deploy (shell + file access)
+    deploy [
+        label="Deploy",
+        role="devops",
+        prompt="Run the build pipeline and verify the deployment artifacts are correct."
+    ]
+
+    // Flow
+    start -> research -> plan -> implement -> test -> review -> gate
+    gate -> deploy    [label="Yes", condition="outcome=success", weight="10"]
+    gate -> implement [label="No",  condition="outcome!=success"]
+    deploy -> exit
+}
