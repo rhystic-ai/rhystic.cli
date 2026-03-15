@@ -1,0 +1,20 @@
+// Test pipeline for LSP integration
+// Creates a Go file with good buy cruel world message
+digraph TestLSP {
+    graph [goal="Test LSP analysis with custom Go code"]
+
+    start [shape=Mdiamond, label="Start"]
+    exit  [shape=Msquare, label="Exit"]
+
+    create [
+        label="Create Go Program",
+        prompt="Create a file called goodbye.go with a main package. The program should print the text good buy cruel world and exit with code 0. Use write_file to create the file. The LSP will automatically analyze it and log any issues."
+    ]
+
+    analyze [
+        label="Analyze Code",
+        prompt="Use the lsp_analyze tool to check goodbye.go for any issues. Report what the LSP found if anything."
+    ]
+
+    start -> create -> analyze -> exit
+}
