@@ -18,6 +18,7 @@ import (
 	"github.com/rhystic/attractor/pkg/engine"
 	"github.com/rhystic/attractor/pkg/events"
 	"github.com/rhystic/attractor/pkg/llm"
+	"github.com/rhystic/attractor/pkg/tui"
 )
 
 const version = "0.1.0"
@@ -49,6 +50,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return runAgent(opts, stdin, stdout, stderr)
 	case "validate":
 		return validatePipeline(opts, stdout, stderr)
+	case "tui":
+		return runTUI(opts, stdout, stderr)
 	default:
 		return fmt.Errorf("unknown command: %s", cmd)
 	}
@@ -160,6 +163,7 @@ Commands:
   run       Execute a DOT pipeline file
   agent     Run the coding agent with a prompt
   validate  Validate a DOT pipeline file
+  tui       Launch TUI to browse pipeline history
   help      Show this help message
   version   Show version information
 
@@ -184,6 +188,7 @@ Examples:
   attractor run pipeline.dot
   attractor agent "Fix the bug in main.go"
   attractor validate workflow.dot
+  attractor tui
 
 `)
 }
@@ -410,6 +415,10 @@ func validatePipeline(opts options, stdout, stderr io.Writer) error {
 	}
 
 	return fmt.Errorf("validation failed with %d error(s)", len(errors))
+}
+
+func runTUI(opts options, stdout, stderr io.Writer) error {
+	return tui.Run(opts.logsDir)
 }
 
 func markReachable(graph *dot.Graph, nodeID string, reachable map[string]bool) {

@@ -13,23 +13,30 @@ digraph SimplePipeline {
 
     // Workflow stages
     plan [
-        label="Plan Implementation",
-        prompt="Analyze the goal and create a plan for implementation. List the files that need to be created or modified."
+        label="Plan Feature",
+        prompt="The goal is: 'Create a factorial calculator function in Go with tests'
+
+Provide a concise plan in 2-3 sentences. Specify:
+1. What file to create (e.g., factorial.go)
+2. What test file to create (e.g., factorial_test.go)
+
+Do NOT write the code yet, just the plan."
     ]
 
     implement [
-        label="Implement Feature",
-        prompt="Implement the feature according to the plan. Create or modify the necessary files."
+        label="Implement Factorial",
+        prompt="Create factorial.go with a Factorial(n int) function that calculates factorial using iteration (not recursion). The function should handle n >= 0, returning 1 for n=0, and return an error for negative numbers. Keep it under 20 lines of code. Use ONLY the write_file tool, no need to read or explore first."
     ]
 
     test [
         label="Write Tests",
-        prompt="Write tests for the implemented feature. Ensure good coverage."
+        prompt="Create factorial_test.go with table-driven tests for Factorial(). Test these cases: 0->1, 1->1, 5->120, 10->3628800, and -1 returns error. Use t.Errorf for failures. Keep it under 30 lines. Use write_file directly."
     ]
 
     validate [
+        shape=parallelogram,
         label="Run Tests",
-        prompt="Run the test suite and verify all tests pass. Fix any failures."
+        tool_command="go test -v factorial.go factorial_test.go"
     ]
 
     gate [
