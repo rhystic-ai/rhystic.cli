@@ -1,0 +1,42 @@
+// Pipeline with LSP analysis - demonstrates automatic code quality checks
+// Every write_file triggers async LSP analysis
+digraph LSPExample {
+    graph [
+        goal="Create a factorial calculator with automatic quality checks"
+    ]
+
+    start [shape=Mdiamond, label="Start"]
+    exit  [shape=Msquare, label="Exit"]
+
+    // The agent creates the code - LSP analysis runs automatically after write_file
+    implement [
+        label="Implement Factorial",
+        prompt="Create a file called factorial.go with a Factorial(n int) function that calculates factorial.
+
+The function should:
+1. Handle n >= 0
+2. Return an error for negative numbers  
+3. Use iteration (not recursion) for performance
+4. Include basic error handling
+
+After writing the file, the system will automatically analyze it with LSP to check for issues.
+
+Write the file using write_file, then check the logs for any LSP diagnostics."
+    ]
+
+    // The agent can explicitly call lsp_analyze if needed
+    verify [
+        label="Verify Code Quality",
+        prompt="Use the lsp_analyze tool to check factorial.go for any issues.
+
+The lsp_analyze tool will:
+- Parse the Go code
+- Check for syntax errors
+- Find potential issues
+- Return diagnostic messages
+
+If issues are found, fix them. If no issues, proceed."
+    ]
+
+    start -> implement -> verify -> exit
+}
