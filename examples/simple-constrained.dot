@@ -1,0 +1,69 @@
+// Simple pipeline with constrained tools
+// Uses roles to limit what each step can do
+digraph SimplePipeline {
+    graph [
+        goal="Implement a simple feature with tests"
+        label="Simple Pipeline"
+    ]
+
+    start [shape=Mdiamond, label="Start"]
+    exit  [shape=Msquare, label="Exit"]
+
+    // Plan - no tool restrictions needed
+    plan [
+        label="Plan Feature", 
+        prompt="Create a factorial calculator in Go. The plan: 1) Create factorial.go with Factorial(n int) function 2) Create factorial_test.go with tests. Reply with just this plan."
+    ]
+
+    // Implement - restrict to write_file only
+    implement [
+        label="Implement Factorial",
+        role="developer", 
+        prompt="Write factorial.go with:
+package main
+import \"errors\"
+func Factorial(n int) (int, error) {
+    if n < 0 { return 0, errors.New(\"negative\") }
+    result := 1
+    for i := 2; i <= n; i++ { result *= i }
+    return result, nil
+}
+Use write_file to create the file."
+    ]
+
+    // Test - restrict to write_file only  
+    test [
+        label="Write Tests",
+        role="developer",
+        prompt="Write factorial_test.go with:
+package main
+import \"testing\"
+func TestFactorial(t *testing.T) {
+    tests := []struct{n int; want int; err bool}{
+        {0, 1, false}, {1, 1, false}, {5, 120, false}, {10, 3628800, false}, {-1, 0, true},
+    }
+    for _, tt := range tests {
+        got, err := Factorial(tt.n)
+        if (err != nil) != tt.err { t.Errorf(\"Factorial(%d) error unexpected\", tt.n) }
+        if !tt.err && got != tt.want { t.Errorf(\"Factorial(%d) = %d, want %d\", tt.n, got, tt.want) }
+    }
+}
+Use write_file to create the file."
+    ]
+
+    // Validate using tool handler (no LLM)
+    validate [
+        shape=parallelogram,
+        label="Run Tests", 
+        tool_command="go test -v factorial.go factorial_test.go"
+    ]
+
+    gate [
+        shape=diamond,
+        label="Tests Pass?"
+    ]
+
+    start -> plan -> implement -> test -> validate -> gate
+    gate -> exit      [label="Yes", condition="outcome=success", weight="10"]
+    gate -> implement [label="No",  condition="outcome!=success"]
+}

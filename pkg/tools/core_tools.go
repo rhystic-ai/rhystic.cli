@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
+	"time"
 )
 
 // ReadFileTool reads files from the filesystem.
@@ -99,7 +102,112 @@ func (t *WriteFileTool) Execute(ctx context.Context, env ExecutionEnvironment, a
 		return "", err
 	}
 
-	return fmt.Sprintf("Successfully wrote %d bytes to %s", len(params.Content), params.FilePath), nil
+	result := fmt.Sprintf("Successfully wrote %d bytes to %s", len(params.Content), params.FilePath)
+
+	// Auto-trigger LSP analysis for supported file types
+	ext := strings.ToLower(getExtension(params.FilePath))
+	if isSupportedLSPFile(ext) {
+		// Run LSP analysis asynchronously (don't block)
+		go func() {
+			lspCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			client := GetLSPClient()
+			diagsCh := client.Analyze(lspCtx, params.FilePath, params.Content)
+
+			select {
+			case diags := <-diagsCh:
+				if diags != nil && len(diags) > 0 {
+					// Log diagnostics (agent can see this in logs)
+					fmt.Fprintf(os.Stderr, "[LSP Analysis] %s: found %d issue(s)\n", params.FilePath, len(diags))
+					for _, d := range diags {
+						fmt.Fprintf(os.Stderr, "  Line %d: %s\n", d.Line+1, d.Message)
+					}
+				}
+			case <-lspCtx.Done():
+				// Timeout - silent
+			}
+		}()
+	}
+
+	return result, nil
+}
+
+// LSPAnalyzeTool runs LSP analysis on a file.
+type LSPAnalyzeTool struct{}
+
+func (t *LSPAnalyzeTool) Name() string { return "lsp_analyze" }
+
+func (t *LSPAnalyzeTool) Description() string {
+	return "Analyze a code file using Language Server Protocol (LSP) to find issues, warnings, and suggestions. Works with Go, Python, TypeScript, and JavaScript files."
+}
+
+func (t *LSPAnalyzeTool) Parameters() json.RawMessage {
+	return json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"file_path": {
+				"type": "string",
+				"description": "Absolute or relative path to the code file to analyze"
+			}
+		},
+		"required": ["file_path"]
+	}`)
+}
+
+func (t *LSPAnalyzeTool) Execute(ctx context.Context, env ExecutionEnvironment, args json.RawMessage) (string, error) {
+	var params struct {
+		FilePath string `json:"file_path"`
+	}
+	if err := json.Unmarshal(args, &params); err != nil {
+		return "", fmt.Errorf("parse arguments: %w", err)
+	}
+
+	// Read the file content
+	content, err := env.ReadFile(ctx, params.FilePath, 1, 10000)
+	if err != nil {
+		return "", fmt.Errorf("read file for analysis: %w", err)
+	}
+
+	// Get LSP client
+	client := GetLSPClient()
+
+	// Run async analysis
+	diagsCh := client.Analyze(ctx, params.FilePath, content)
+
+	// Wait for result with timeout
+	select {
+	case diags := <-diagsCh:
+		if diags == nil {
+			return "No diagnostics available (LSP may not be running or file type not supported)", nil
+		}
+
+		if len(diags) == 0 {
+			return "No issues found! Code looks good.", nil
+		}
+
+		// Format diagnostics
+		var result strings.Builder
+		result.WriteString(fmt.Sprintf("Found %d issue(s):\n\n", len(diags)))
+
+		for _, d := range diags {
+			severity := "INFO"
+			switch d.Severity {
+			case 1:
+				severity = "ERROR"
+			case 2:
+				severity = "WARNING"
+			case 3:
+				severity = "INFO"
+			}
+			result.WriteString(fmt.Sprintf("Line %d: [%s] %s\n", d.Line+1, severity, d.Message))
+		}
+
+		return result.String(), nil
+
+	case <-ctx.Done():
+		return "Analysis timed out after 10 seconds", nil
+	}
 }
 
 // EditFileTool edits files using search-and-replace.
@@ -441,5 +549,24 @@ func CreateDefaultRegistry() *Registry {
 	r.Register(&GrepTool{})
 	r.Register(&GlobTool{})
 	r.Register(&ListDirTool{})
+	r.Register(&LSPAnalyzeTool{})
 	return r
+}
+
+// getExtension extracts file extension from path
+func getExtension(path string) string {
+	return filepath.Ext(path)
+}
+
+// isSupportedLSPFile checks if file type is supported by LSP
+func isSupportedLSPFile(ext string) bool {
+	supported := map[string]bool{
+		".go":  true,
+		".py":  true,
+		".ts":  true,
+		".tsx": true,
+		".js":  true,
+		".jsx": true,
+	}
+	return supported[ext]
 }
