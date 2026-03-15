@@ -1,0 +1,9 @@
+# Logs
+attractor-logs/
+test-logs/
+*-logs/
+
+# Binaries
+attractor
+attractor-lsp
+lsp
