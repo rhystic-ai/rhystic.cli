@@ -3,7 +3,11 @@ attractor-logs/
 test-logs/
 *-logs/
 
-# Binaries
+# Compiled binaries
 attractor
 attractor-lsp
 lsp
+
+# Agent-generated scratch files
+factorial.go
+factorial_test.go
